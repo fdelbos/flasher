@@ -160,16 +160,18 @@ Design notes:
 
 ```
 esp/         ROM/serial protocol: SLIP, reset+SYNC, registers, identity,
-             security, flashing, monitor; the Transport interface.
+             security, flashing (stub + compressed), erase, read, monitor;
+             the Transport interface.
 partition/   flasher_args.json parsing.
+bundle/      portable, OTA-ready flash-archive format (pack/unpack).
+nvs/         pure-Go NVS partition image generation (see nvs/FORMAT.md).
 cmd/flasher/ the CLI.
 ```
 
 ## Roadmap
 
-- `bundle/` — a portable, OTA-ready flash-archive format (pack/unpack).
-- `nvs/` — pure-Go NVS partition image generation.
 - eFuse / Secure Boot v2 + Flash Encryption provisioning.
+- NVS: CSV input + cross-page blob chunking + encrypted NVS.
 - More chip targets (ESP32 / S3 / C3 / H2).
 
 ## License
