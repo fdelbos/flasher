@@ -19,6 +19,8 @@ func main() {
 		cmdList()
 	case "chip-info":
 		cmdChipInfo(os.Args[2:])
+	case "info":
+		cmdInfo(os.Args[2:])
 	default:
 		usage()
 	}
@@ -27,7 +29,8 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  flasher list              list available serial devices")
-	fmt.Fprintln(os.Stderr, "  flasher chip-info [port]  read chip identity (auto-detects port if omitted)")
+	fmt.Fprintln(os.Stderr, "  flasher chip-info [port]  read chip identity (auto-detects port)")
+	fmt.Fprintln(os.Stderr, "  flasher info [port]       identity + security/lockdown state")
 	os.Exit(2)
 }
 
@@ -54,34 +57,72 @@ func cmdList() {
 }
 
 func cmdChipInfo(args []string) {
-	var port string
-	if len(args) >= 1 {
-		port = args[0]
-	} else {
-		p, err := esp.DetectPort()
-		if err != nil {
-			fatal(err)
-		}
-		port = p
-		fmt.Printf("auto-detected port: %s\n", port)
+	l := connect(resolvePort(args))
+	defer l.Close()
+	printIdentity(l)
+	if si, err := l.SecurityInfo(); err == nil {
+		printChipID(si)
+	}
+	l.HardReset()
+}
+
+func cmdInfo(args []string) {
+	l := connect(resolvePort(args))
+	defer l.Close()
+	printIdentity(l)
+
+	si, err := l.SecurityInfo()
+	if err != nil {
+		fatal(err)
+	}
+	printChipID(si)
+
+	fmt.Println("security:")
+	fmt.Printf("  secure boot:      %s\n", onoff(si.SecureBoot()))
+	fmt.Printf("  flash encryption: %s\n", onoff(si.FlashEncryption()))
+	fmt.Printf("  secure download:  %s\n", onoff(si.SecureDownload()))
+	r0, r1, r2 := si.KeyRevocations()
+	fmt.Printf("  key revoke:       0:%t 1:%t 2:%t\n", r0, r1, r2)
+	fmt.Printf("  raw flags:        0x%08x   crypt_cnt: 0x%02x\n", si.Flags, si.FlashCryptCnt)
+	fmt.Println("  key slots:")
+	for i := 0; i < 6 && i < len(si.KeyPurposes); i++ { // C6 has 6 key blocks
+		fmt.Printf("    block %d: %s\n", i, esp.KeyPurposeName(si.KeyPurposes[i]))
 	}
 
+	l.HardReset()
+}
+
+// --- shared helpers ---
+
+func resolvePort(args []string) string {
+	if len(args) >= 1 {
+		return args[0]
+	}
+	p, err := esp.DetectPort()
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("auto-detected port: %s\n", p)
+	return p
+}
+
+func connect(port string) *esp.Loader {
 	t, err := esp.OpenSerial(port, esp.ROMBaud)
 	if err != nil {
 		fatal(err)
 	}
 	l := esp.NewLoader(t)
-	defer l.Close()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
 	fmt.Printf("connecting to %s ...\n", port)
 	if err := l.Connect(ctx); err != nil {
 		fatal(err)
 	}
 	fmt.Println("connected.")
+	return l
+}
 
+func printIdentity(l *esp.Loader) {
 	macs, err := l.MACs()
 	if err != nil {
 		fatal(err)
@@ -89,16 +130,21 @@ func cmdChipInfo(args []string) {
 	fmt.Printf("board id:      %s   (base MAC, = airlock hardware_serial)\n", esp.HexID(macs.WiFiSTA))
 	fmt.Printf("WiFi/base MAC: %s\n", esp.FormatMAC(macs.WiFiSTA))
 	fmt.Printf("BT/BLE MAC:    %s\n", esp.FormatMAC(macs.BT))
+}
 
-	if id, err := l.ChipID(); err == nil {
-		label := "unknown"
-		if id == esp.ChipIDESP32C6 {
-			label = "esp32c6"
-		}
-		fmt.Printf("chip id:       %d (%s)\n", id, label)
+func printChipID(si *esp.SecurityInfo) {
+	label := "unknown"
+	if si.ChipID == esp.ChipIDESP32C6 {
+		label = "esp32c6"
 	}
+	fmt.Printf("chip id:       %d (%s)\n", si.ChipID, label)
+}
 
-	l.HardReset()
+func onoff(b bool) string {
+	if b {
+		return "ENABLED"
+	}
+	return "disabled"
 }
 
 func fatal(err error) {
