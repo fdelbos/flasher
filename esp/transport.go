@@ -23,9 +23,15 @@ type serialTransport struct {
 	p serial.Port
 }
 
-// OpenSerial opens a serial port at the given baud rate.
+// OpenSerial opens a serial port at the given baud rate. DTR/RTS are held
+// deasserted on open so that merely attaching does not pulse the ESP auto-reset
+// circuit and reboot the board (so `monitor` can watch a running device).
+// Commands that need a reset (Connect, flashing) drive the lines explicitly after.
 func OpenSerial(name string, baud int) (Transport, error) {
-	p, err := serial.Open(name, &serial.Mode{BaudRate: baud})
+	p, err := serial.Open(name, &serial.Mode{
+		BaudRate:          baud,
+		InitialStatusBits: &serial.ModemOutputBits{RTS: false, DTR: false},
+	})
 	if err != nil {
 		return nil, err
 	}
