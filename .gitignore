@@ -1,0 +1,9 @@
+# build output (the CLI builds to a binary named after its dir)
+/flasher
+/cmd/flasher/flasher
+/dist/
+*.test
+*.out
+
+# editor / OS
+.DS_Store
