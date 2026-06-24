@@ -20,12 +20,13 @@ var ErrTimeout = errors.New("esp: read timeout")
 
 // Loader speaks the ESP serial bootloader protocol over a Transport.
 type Loader struct {
-	t    Transport
-	stub bool // false = ROM loader (4-byte status trailer), true = stub (2-byte)
+	t       Transport
+	stub    bool // false = ROM loader (4-byte status trailer), true = stub (2-byte)
+	curBaud int  // current port baud, tracked for CHANGE_BAUDRATE under the stub
 }
 
 // NewLoader wraps a Transport. Call Connect before issuing commands.
-func NewLoader(t Transport) *Loader { return &Loader{t: t} }
+func NewLoader(t Transport) *Loader { return &Loader{t: t, curBaud: ROMBaud} }
 
 // Close closes the underlying transport.
 func (l *Loader) Close() error { return l.t.Close() }

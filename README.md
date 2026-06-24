@@ -94,7 +94,7 @@ with the chip's own MD5. Partitions not in `flash_files` (e.g. NVS) are left
 untouched.
 
 ```
-flasher flash ./build                 # auto-detect port, 460800 baud
+flasher flash ./build                 # auto-detect port, stub + compression, 921600 baud
 flasher flash --dry-run ./build       # print the plan, write nothing
 flasher flash --port /dev/cu.usbserial-110 --baud 115200 ./build
 ```
@@ -113,8 +113,9 @@ done. resetting into app.
 ```
 
 > Build half stays esp-idf/cmake; this replaces only the flash + monitor half.
-> Currently ROM-mode (1 KiB blocks); the stub loader (16 KiB blocks, ~10×
-> faster) is on the roadmap.
+> Uploads Espressif's flasher stub and streams compressed (`FLASH_DEFL`) by
+> default — a 2 MB app flashes in ~20s. Falls back to ROM mode if the stub
+> won't load.
 
 ## Library
 
@@ -149,7 +150,6 @@ cmd/flasher/ the CLI.
 
 ## Roadmap
 
-- Stub loader (16 KiB blocks + compression) for ~10× faster flashing.
 - `bundle/` — a portable, OTA-ready flash-archive format (pack/unpack).
 - `nvs/` — pure-Go NVS partition image generation.
 - eFuse / Secure Boot v2 + Flash Encryption provisioning.

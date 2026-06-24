@@ -53,7 +53,7 @@ func usage() {
 
 func cmdFlash(args []string) {
 	fs := flag.NewFlagSet("flash", flag.ExitOnError)
-	baud := fs.Int("baud", 460800, "flash baud rate")
+	baud := fs.Int("baud", 921600, "flash baud rate")
 	portFlag := fs.String("port", "", "serial port (auto-detect if empty)")
 	dryRun := fs.Bool("dry-run", false, "print the plan, do not write")
 	_ = fs.Parse(args)
@@ -84,6 +84,13 @@ func cmdFlash(args []string) {
 	l := connect(port)
 	defer l.Close()
 
+	fmt.Print("loading stub ... ")
+	if err := l.RunStub(); err != nil {
+		fmt.Printf("failed (%v); using ROM mode\n", err)
+	} else {
+		fmt.Println("ok")
+	}
+
 	if err := l.SpiAttach(); err != nil {
 		fatal(err)
 	}
@@ -110,9 +117,7 @@ func cmdFlash(args []string) {
 		}
 		fmt.Println("  verified (md5) ok")
 	}
-	if err := l.FlashFinish(false); err != nil {
-		fatal(err)
-	}
+	_ = l.FlashFinish(false) // best-effort; HardReset reboots regardless
 	fmt.Println("done. resetting into app.")
 	l.HardReset()
 }
