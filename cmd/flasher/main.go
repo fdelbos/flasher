@@ -3,8 +3,12 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/fdelbos/flasher/esp"
@@ -21,6 +25,8 @@ func main() {
 		cmdChipInfo(os.Args[2:])
 	case "info":
 		cmdInfo(os.Args[2:])
+	case "monitor":
+		cmdMonitor(os.Args[2:])
 	default:
 		usage()
 	}
@@ -28,10 +34,47 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  flasher list              list available serial devices")
-	fmt.Fprintln(os.Stderr, "  flasher chip-info [port]  read chip identity (auto-detects port)")
-	fmt.Fprintln(os.Stderr, "  flasher info [port]       identity + security/lockdown state")
+	fmt.Fprintln(os.Stderr, "  flasher list                       list available serial devices")
+	fmt.Fprintln(os.Stderr, "  flasher chip-info [port]           read chip identity (auto-detects port)")
+	fmt.Fprintln(os.Stderr, "  flasher info [port]                identity + security/lockdown state")
+	fmt.Fprintln(os.Stderr, "  flasher monitor [flags] [port]     watch serial output (ctrl-c to quit)")
+	fmt.Fprintln(os.Stderr, "      --baud N   baud rate (default 115200)")
+	fmt.Fprintln(os.Stderr, "      --out F    also write output to file F")
+	fmt.Fprintln(os.Stderr, "      --reset    reset the board first to capture boot logs")
 	os.Exit(2)
+}
+
+func cmdMonitor(args []string) {
+	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
+	baud := fs.Int("baud", 115200, "baud rate")
+	out := fs.String("out", "", "also write output to this file")
+	reset := fs.Bool("reset", false, "reset the board to capture boot logs")
+	_ = fs.Parse(args)
+	port := resolvePort(fs.Args())
+
+	w := io.Writer(os.Stdout)
+	if *out != "" {
+		f, err := os.Create(*out)
+		if err != nil {
+			fatal(err)
+		}
+		defer f.Close()
+		w = io.MultiWriter(os.Stdout, f)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sig
+		fmt.Fprintln(os.Stderr, "\nstopping.")
+		cancel()
+	}()
+
+	fmt.Fprintf(os.Stderr, "monitoring %s @ %d (ctrl-c to quit)\n", port, *baud)
+	if err := esp.Monitor(ctx, port, *baud, w, *reset); err != nil && ctx.Err() == nil {
+		fatal(err)
+	}
 }
 
 func cmdList() {
