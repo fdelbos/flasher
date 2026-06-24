@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fdelbos/flasher/esp"
+	"github.com/fdelbos/flasher/partition"
 )
 
 func main() {
@@ -27,6 +28,8 @@ func main() {
 		cmdInfo(os.Args[2:])
 	case "monitor":
 		cmdMonitor(os.Args[2:])
+	case "flash":
+		cmdFlash(os.Args[2:])
 	default:
 		usage()
 	}
@@ -41,7 +44,77 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "      --baud N   baud rate (default 115200)")
 	fmt.Fprintln(os.Stderr, "      --out F    also write output to file F")
 	fmt.Fprintln(os.Stderr, "      --reset    reset the board first to capture boot logs")
+	fmt.Fprintln(os.Stderr, "  flasher flash [flags] <build-dir>  flash an esp-idf build (flasher_args.json)")
+	fmt.Fprintln(os.Stderr, "      --port P   serial port (auto-detect if omitted)")
+	fmt.Fprintln(os.Stderr, "      --baud N   flash baud rate (default 460800)")
+	fmt.Fprintln(os.Stderr, "      --dry-run  print the flash plan and exit")
 	os.Exit(2)
+}
+
+func cmdFlash(args []string) {
+	fs := flag.NewFlagSet("flash", flag.ExitOnError)
+	baud := fs.Int("baud", 460800, "flash baud rate")
+	portFlag := fs.String("port", "", "serial port (auto-detect if empty)")
+	dryRun := fs.Bool("dry-run", false, "print the plan, do not write")
+	_ = fs.Parse(args)
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: flasher flash [flags] <build-dir>")
+		os.Exit(2)
+	}
+	buildDir := fs.Arg(0)
+
+	fa, files, err := partition.Load(buildDir)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("chip: %s   flash: %s / %s / %s\n", fa.Extra.Chip,
+		fa.FlashSettings.FlashMode, fa.FlashSettings.FlashSize, fa.FlashSettings.FlashFreq)
+	fmt.Println("plan:")
+	for _, f := range files {
+		fmt.Printf("  0x%06x  %-34s %9d bytes\n", f.Offset, f.Name, len(f.Data))
+	}
+	if *dryRun {
+		return
+	}
+
+	port := *portFlag
+	if port == "" {
+		port = resolvePort(nil)
+	}
+	l := connect(port)
+	defer l.Close()
+
+	if err := l.SpiAttach(); err != nil {
+		fatal(err)
+	}
+	if err := l.SpiSetParams(partition.FlashSizeBytes(fa.FlashSettings.FlashSize)); err != nil {
+		fatal(err)
+	}
+	if *baud != esp.ROMBaud {
+		fmt.Printf("switching to %d baud ...\n", *baud)
+		if err := l.ChangeBaud(*baud); err != nil {
+			fatal(err)
+		}
+	}
+
+	for _, f := range files {
+		fmt.Printf("writing %-34s @ 0x%06x (%d bytes)\n", f.Name, f.Offset, len(f.Data))
+		err := l.WriteFlash(f.Offset, f.Data, func(done, total int) {
+			if done%64 == 0 || done == total {
+				fmt.Printf("\r  %d/%d blocks", done, total)
+			}
+		})
+		fmt.Println()
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Println("  verified (md5) ok")
+	}
+	if err := l.FlashFinish(false); err != nil {
+		fatal(err)
+	}
+	fmt.Println("done. resetting into app.")
+	l.HardReset()
 }
 
 func cmdMonitor(args []string) {

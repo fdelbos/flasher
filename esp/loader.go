@@ -88,9 +88,25 @@ func (l *Loader) readFrame(timeout time.Duration) ([]byte, error) {
 	}
 }
 
+// writeAll writes every byte, looping over partial writes (a full serial output
+// buffer otherwise truncates a frame and the chip rejects the packet).
+func (l *Loader) writeAll(b []byte) error {
+	for len(b) > 0 {
+		n, err := l.t.Write(b)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errors.New("esp: serial short write")
+		}
+		b = b[n:]
+	}
+	return nil
+}
+
 // command sends a request and returns the matching, status-checked response.
 func (l *Loader) command(cmd command, data []byte, chk uint32, timeout time.Duration) (*response, error) {
-	if _, err := l.t.Write(slipEncode(encodeCommand(cmd, data, chk))); err != nil {
+	if err := l.writeAll(slipEncode(encodeCommand(cmd, data, chk))); err != nil {
 		return nil, err
 	}
 	deadline := time.Now().Add(timeout)
