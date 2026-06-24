@@ -3,16 +3,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/fdelbos/flasher/bundle"
 	"github.com/fdelbos/flasher/esp"
 	"github.com/fdelbos/flasher/partition"
 )
@@ -36,6 +39,10 @@ func main() {
 		cmdErase(os.Args[2:])
 	case "read":
 		cmdRead(os.Args[2:])
+	case "pack":
+		cmdPack(os.Args[2:])
+	case "unpack":
+		cmdUnpack(os.Args[2:])
 	default:
 		usage()
 	}
@@ -58,7 +65,111 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "      --port P            serial port")
 	fmt.Fprintln(os.Stderr, "      --region OFF:SIZE   erase only a 4KiB-aligned region (hex ok)")
 	fmt.Fprintln(os.Stderr, "  flasher read [--port P] <off> <size> <file>   dump flash to a file (stub)")
+	fmt.Fprintln(os.Stderr, "  flasher pack [-o out] [--version V] <build-dir>   build a portable .fbundle")
+	fmt.Fprintln(os.Stderr, "  flasher unpack [-C dir] <bundle>                  extract a .fbundle")
 	os.Exit(2)
+}
+
+// loadFlashSource reads flash images from either an esp-idf build dir or a bundle.
+func loadFlashSource(path string) (chip, mode, size, freq string, files []partition.FlashFile) {
+	info, err := os.Stat(path)
+	if err != nil {
+		fatal(err)
+	}
+	if info.IsDir() {
+		fa, ff, err := partition.Load(path)
+		if err != nil {
+			fatal(err)
+		}
+		return fa.Extra.Chip, fa.FlashSettings.FlashMode, fa.FlashSettings.FlashSize, fa.FlashSettings.FlashFreq, ff
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		fatal(err)
+	}
+	defer f.Close()
+	b, err := bundle.Open(f)
+	if err != nil {
+		fatal(err)
+	}
+	m := b.Manifest
+	return m.Chip, m.FlashMode, m.FlashSize, m.FlashFreq, b.FlashFiles()
+}
+
+func cmdPack(args []string) {
+	fs := flag.NewFlagSet("pack", flag.ExitOnError)
+	out := fs.String("o", "", "output bundle file")
+	version := fs.String("version", "", "version label")
+	_ = fs.Parse(args)
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: flasher pack [flags] <build-dir>")
+		os.Exit(2)
+	}
+	buildDir := fs.Arg(0)
+	b, err := bundle.FromBuildDir(buildDir, *version, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		fatal(err)
+	}
+	outPath := *out
+	if outPath == "" {
+		outPath = defaultBundleName(buildDir)
+	}
+	f, err := os.Create(outPath)
+	if err != nil {
+		fatal(err)
+	}
+	defer f.Close()
+	if err := b.Pack(f); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("packed %d files -> %s (chip %s)\n", len(b.Manifest.Files), outPath, b.Manifest.Chip)
+	for _, file := range b.Manifest.Files {
+		fmt.Printf("  0x%06x  %-15s %s\n", file.Offset, file.Role, file.Name)
+	}
+}
+
+func cmdUnpack(args []string) {
+	fs := flag.NewFlagSet("unpack", flag.ExitOnError)
+	dir := fs.String("C", ".", "output directory")
+	_ = fs.Parse(args)
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: flasher unpack [-C dir] <bundle>")
+		os.Exit(2)
+	}
+	f, err := os.Open(fs.Arg(0))
+	if err != nil {
+		fatal(err)
+	}
+	defer f.Close()
+	b, err := bundle.Open(f)
+	if err != nil {
+		fatal(err)
+	}
+	if err := os.MkdirAll(*dir, 0o755); err != nil {
+		fatal(err)
+	}
+	mj, _ := json.MarshalIndent(b.Manifest, "", "  ")
+	if err := os.WriteFile(filepath.Join(*dir, "manifest.json"), mj, 0o644); err != nil {
+		fatal(err)
+	}
+	for _, file := range b.Manifest.Files {
+		d, _ := b.File(file.Name)
+		if err := os.WriteFile(filepath.Join(*dir, file.Name), d, 0o644); err != nil {
+			fatal(err)
+		}
+	}
+	fmt.Printf("unpacked %d files + manifest.json -> %s\n", len(b.Manifest.Files), *dir)
+}
+
+func defaultBundleName(buildDir string) string {
+	base := filepath.Base(filepath.Clean(buildDir))
+	if base == "build" {
+		base = filepath.Base(filepath.Dir(filepath.Clean(buildDir)))
+	}
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "firmware"
+	}
+	return base + ".fbundle"
 }
 
 func loadStub(l *esp.Loader) {
@@ -168,17 +279,11 @@ func cmdFlash(args []string) {
 	dryRun := fs.Bool("dry-run", false, "print the plan, do not write")
 	_ = fs.Parse(args)
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: flasher flash [flags] <build-dir>")
+		fmt.Fprintln(os.Stderr, "usage: flasher flash [flags] <build-dir | bundle>")
 		os.Exit(2)
 	}
-	buildDir := fs.Arg(0)
-
-	fa, files, err := partition.Load(buildDir)
-	if err != nil {
-		fatal(err)
-	}
-	fmt.Printf("chip: %s   flash: %s / %s / %s\n", fa.Extra.Chip,
-		fa.FlashSettings.FlashMode, fa.FlashSettings.FlashSize, fa.FlashSettings.FlashFreq)
+	chip, fmode, fsize, ffreq, files := loadFlashSource(fs.Arg(0))
+	fmt.Printf("chip: %s   flash: %s / %s / %s\n", chip, fmode, fsize, ffreq)
 	fmt.Println("plan:")
 	for _, f := range files {
 		fmt.Printf("  0x%06x  %-34s %9d bytes\n", f.Offset, f.Name, len(f.Data))
@@ -204,7 +309,7 @@ func cmdFlash(args []string) {
 	if err := l.SpiAttach(); err != nil {
 		fatal(err)
 	}
-	if err := l.SpiSetParams(partition.FlashSizeBytes(fa.FlashSettings.FlashSize)); err != nil {
+	if err := l.SpiSetParams(partition.FlashSizeBytes(fsize)); err != nil {
 		fatal(err)
 	}
 	if *baud != esp.ROMBaud {
