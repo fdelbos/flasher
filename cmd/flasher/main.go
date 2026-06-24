@@ -112,7 +112,9 @@ func cmdChipInfo(args []string) {
 func cmdInfo(args []string) {
 	l := connect(resolvePort(args))
 	defer l.Close()
-	printIdentity(l)
+	macs := printIdentity(l)
+	fmt.Printf("WiFi AP MAC:      %s\n", esp.FormatMAC(macs.WiFiAP))
+	fmt.Printf("ETH MAC:          %s\n", esp.FormatMAC(macs.ETH))
 
 	si, err := l.SecurityInfo()
 	if err != nil {
@@ -165,14 +167,16 @@ func connect(port string) *esp.Loader {
 	return l
 }
 
-func printIdentity(l *esp.Loader) {
+func printIdentity(l *esp.Loader) esp.MACs {
 	macs, err := l.MACs()
 	if err != nil {
 		fatal(err)
 	}
-	fmt.Printf("board id:      %s   (base MAC, = airlock hardware_serial)\n", esp.HexID(macs.WiFiSTA))
-	fmt.Printf("WiFi/base MAC: %s\n", esp.FormatMAC(macs.WiFiSTA))
-	fmt.Printf("BT/BLE MAC:    %s\n", esp.FormatMAC(macs.BT))
+	fmt.Printf("board id (mac):   %s\n", esp.HexID(macs.WiFiSTA))
+	fmt.Printf("board id (eui64): %s\n", esp.EUI64Hex(macs.WiFiSTA))
+	fmt.Printf("WiFi MAC:         %s\n", esp.FormatMAC(macs.WiFiSTA))
+	fmt.Printf("BLE MAC:          %s\n", esp.FormatMAC(macs.BT))
+	return macs
 }
 
 func printChipID(si *esp.SecurityInfo) {
