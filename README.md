@@ -117,6 +117,23 @@ done. resetting into app.
 > default — a 2 MB app flashes in ~20s. Falls back to ROM mode if the stub
 > won't load.
 
+### `flasher erase [flags]`
+
+Erase flash (uses the stub).
+
+```
+flasher erase                          # erase the whole chip
+flasher erase --region 0x80000:0x10000 # erase a 4 KiB-aligned region (offset:size, hex ok)
+```
+
+### `flasher read [--port P] <offset> <size> <file>`
+
+Dump a flash region to a file (uses the stub), MD5-verified.
+
+```
+flasher read 0x0 0x6000 bootloader.bin
+```
+
 ## Library
 
 The `esp` package is the reusable core; the CLI is a thin front-end over it.

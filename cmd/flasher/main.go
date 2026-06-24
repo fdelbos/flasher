@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,6 +32,10 @@ func main() {
 		cmdMonitor(os.Args[2:])
 	case "flash":
 		cmdFlash(os.Args[2:])
+	case "erase":
+		cmdErase(os.Args[2:])
+	case "read":
+		cmdRead(os.Args[2:])
 	default:
 		usage()
 	}
@@ -48,7 +54,111 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "      --port P   serial port (auto-detect if omitted)")
 	fmt.Fprintln(os.Stderr, "      --baud N   flash baud rate (default 460800)")
 	fmt.Fprintln(os.Stderr, "      --dry-run  print the flash plan and exit")
+	fmt.Fprintln(os.Stderr, "  flasher erase [flags]              erase whole flash (stub)")
+	fmt.Fprintln(os.Stderr, "      --port P            serial port")
+	fmt.Fprintln(os.Stderr, "      --region OFF:SIZE   erase only a 4KiB-aligned region (hex ok)")
+	fmt.Fprintln(os.Stderr, "  flasher read [--port P] <off> <size> <file>   dump flash to a file (stub)")
 	os.Exit(2)
+}
+
+func loadStub(l *esp.Loader) {
+	fmt.Print("loading stub ... ")
+	if err := l.RunStub(); err != nil {
+		fatal(fmt.Errorf("this command needs the stub loader: %w", err))
+	}
+	fmt.Println("ok")
+}
+
+func cmdErase(args []string) {
+	fs := flag.NewFlagSet("erase", flag.ExitOnError)
+	portFlag := fs.String("port", "", "serial port")
+	region := fs.String("region", "", "erase only OFFSET:SIZE instead of the whole chip")
+	_ = fs.Parse(args)
+	port := *portFlag
+	if port == "" {
+		port = resolvePort(fs.Args())
+	}
+	l := connect(port)
+	defer l.Close()
+	loadStub(l)
+
+	if *region != "" {
+		off, size, err := parseRegion(*region)
+		if err != nil {
+			fatal(err)
+		}
+		fmt.Printf("erasing region 0x%x .. +0x%x ...\n", off, size)
+		if err := l.EraseRegion(off, size); err != nil {
+			fatal(err)
+		}
+	} else {
+		fmt.Println("erasing entire flash (may take a while) ...")
+		if err := l.EraseFlash(); err != nil {
+			fatal(err)
+		}
+	}
+	fmt.Println("done.")
+	l.HardReset()
+}
+
+func cmdRead(args []string) {
+	fs := flag.NewFlagSet("read", flag.ExitOnError)
+	portFlag := fs.String("port", "", "serial port")
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: flasher read [--port P] <offset> <size> <file>")
+		os.Exit(2)
+	}
+	off, err := strconv.ParseUint(rest[0], 0, 32)
+	if err != nil {
+		fatal(fmt.Errorf("bad offset %q: %w", rest[0], err))
+	}
+	size, err := strconv.ParseUint(rest[1], 0, 32)
+	if err != nil {
+		fatal(fmt.Errorf("bad size %q: %w", rest[1], err))
+	}
+	outfile := rest[2]
+
+	port := *portFlag
+	if port == "" {
+		port = resolvePort(nil)
+	}
+	l := connect(port)
+	defer l.Close()
+	loadStub(l)
+
+	fmt.Printf("reading 0x%x bytes @ 0x%x ...\n", size, off)
+	data, err := l.ReadFlash(uint32(off), uint32(size), func(done, total int) {
+		if done%0x10000 == 0 || done == total {
+			fmt.Printf("\r  %d/%d bytes", done, total)
+		}
+	})
+	fmt.Println()
+	if err != nil {
+		fatal(err)
+	}
+	if err := os.WriteFile(outfile, data, 0o644); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("wrote %d bytes to %s\n", len(data), outfile)
+	l.HardReset()
+}
+
+func parseRegion(s string) (offset, size uint32, err error) {
+	a, b, ok := strings.Cut(s, ":")
+	if !ok {
+		return 0, 0, fmt.Errorf("region must be OFFSET:SIZE, got %q", s)
+	}
+	off, err := strconv.ParseUint(a, 0, 32)
+	if err != nil {
+		return 0, 0, fmt.Errorf("bad region offset %q: %w", a, err)
+	}
+	sz, err := strconv.ParseUint(b, 0, 32)
+	if err != nil {
+		return 0, 0, fmt.Errorf("bad region size %q: %w", b, err)
+	}
+	return uint32(off), uint32(sz), nil
 }
 
 func cmdFlash(args []string) {
