@@ -1,5 +1,6 @@
-// Package partition reads esp-idf build metadata (flasher_args.json) so a flash
-// can be replayed exactly without esptool/esp-idf.
+// Package partition reads esp-idf build metadata — flasher_args.json and
+// partition-table.bin — so a flash can be replayed exactly without
+// esptool/esp-idf.
 package partition
 
 import (

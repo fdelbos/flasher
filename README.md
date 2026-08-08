@@ -162,7 +162,7 @@ Design notes:
 esp/         ROM/serial protocol: SLIP, reset+SYNC, registers, identity,
              security, flashing (stub + compressed), erase, read, monitor;
              the Transport interface.
-partition/   flasher_args.json parsing.
+partition/   flasher_args.json + partition-table.bin parsing.
 bundle/      portable, OTA-ready flash-archive format (pack/unpack).
 nvs/         pure-Go NVS partition image generation (see nvs/FORMAT.md).
 cmd/flasher/ the CLI.
