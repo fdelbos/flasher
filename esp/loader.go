@@ -21,8 +21,9 @@ var ErrTimeout = errors.New("esp: read timeout")
 // Loader speaks the ESP serial bootloader protocol over a Transport.
 type Loader struct {
 	t       Transport
-	stub    bool // false = ROM loader (4-byte status trailer), true = stub (2-byte)
-	curBaud int  // current port baud, tracked for CHANGE_BAUDRATE under the stub
+	stub    bool  // false = ROM loader (4-byte status trailer), true = stub (2-byte)
+	curBaud int   // current port baud, tracked for CHANGE_BAUDRATE under the stub
+	chip    *Chip // detected target (register layout + stub); set lazily
 }
 
 // NewLoader wraps a Transport. Call Connect before issuing commands.
@@ -199,14 +200,43 @@ func (l *Loader) ReadReg(addr uint32) (uint32, error) {
 	return resp.value, nil
 }
 
-// BaseMAC reads the 6-byte factory base MAC from eFuse (C6 layout).
+// ensureChip detects the target once (via GET_SECURITY_INFO's chip id) so the
+// right eFuse layout + stub are selected automatically. Safe to call repeatedly.
+func (l *Loader) ensureChip() error {
+	if l.chip != nil {
+		return nil
+	}
+	id, err := l.ChipID()
+	if err != nil {
+		return fmt.Errorf("esp: detect chip: %w", err)
+	}
+	c, ok := chips[id]
+	if !ok {
+		return fmt.Errorf("esp: unsupported chip id %d", id)
+	}
+	l.chip = c
+	return nil
+}
+
+// Chip returns the detected target, detecting on first use.
+func (l *Loader) Chip() (*Chip, error) {
+	if err := l.ensureChip(); err != nil {
+		return nil, err
+	}
+	return l.chip, nil
+}
+
+// BaseMAC reads the 6-byte factory base MAC from eFuse (target-specific register).
 func (l *Loader) BaseMAC() ([6]byte, error) {
 	var mac [6]byte
-	mac0, err := l.ReadReg(c6MacReg)
+	if err := l.ensureChip(); err != nil {
+		return mac, err
+	}
+	mac0, err := l.ReadReg(l.chip.MACEfuseReg)
 	if err != nil {
 		return mac, err
 	}
-	mac1, err := l.ReadReg(c6MacReg + 4)
+	mac1, err := l.ReadReg(l.chip.MACEfuseReg + 4)
 	if err != nil {
 		return mac, err
 	}

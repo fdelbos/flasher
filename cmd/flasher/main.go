@@ -473,11 +473,7 @@ func printIdentity(l *esp.Loader) esp.MACs {
 }
 
 func printChipID(si *esp.SecurityInfo) {
-	label := "unknown"
-	if si.ChipID == esp.ChipIDESP32C6 {
-		label = "esp32c6"
-	}
-	fmt.Printf("chip id:       %d (%s)\n", si.ChipID, label)
+	fmt.Printf("chip id:       %d (%s)\n", si.ChipID, esp.ChipName(si.ChipID))
 }
 
 func onoff(b bool) string {
