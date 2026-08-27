@@ -8,11 +8,15 @@ import (
 	"time"
 )
 
-// esp32c6.json is the prebuilt flasher stub from Espressif's esp-flasher-stub
-// (Apache-2.0 / MIT). It is uploaded into chip RAM and run to speed up flashing.
+// The prebuilt flasher stubs from Espressif's esp-flasher-stub (Apache-2.0 / MIT).
+// Uploaded into chip RAM and run to speed up flashing. One per target; the loader
+// selects the right one from the detected chip.
 //
 //go:embed stubs/esp32c6.json
 var stubC6JSON []byte
+
+//go:embed stubs/esp32s3.json
+var stubS3JSON []byte
 
 const espRAMBlock = 0x1800 // max MEM_DATA block (6 KiB)
 
@@ -33,8 +37,11 @@ func (l *Loader) RunStub() error {
 	if l.stub {
 		return nil
 	}
+	if err := l.ensureChip(); err != nil {
+		return err
+	}
 	var s stubImage
-	if err := json.Unmarshal(stubC6JSON, &s); err != nil {
+	if err := json.Unmarshal(l.chip.stub, &s); err != nil {
 		return err
 	}
 	text, err := base64.StdEncoding.DecodeString(s.Text)
