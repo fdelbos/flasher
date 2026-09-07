@@ -144,6 +144,27 @@ func (l *Loader) resetToBootloader() {
 	l.t.FlushInput()
 }
 
+// resetToBootloaderUSBJTAG drives the download-mode reset for chips using their
+// built-in USB-Serial-JTAG (ESP32-S3/C3/C6 native USB, VID 0x303a). There DTR/RTS
+// map to the chip's boot/reset controls differently than on a USB-UART bridge, so
+// the classic sequence never straps IO0 and sync hangs. Mirrors esptool's
+// USBJTAGSerialReset.
+func (l *Loader) resetToBootloaderUSBJTAG() {
+	l.t.SetRTS(false)
+	l.t.SetDTR(false) // idle
+	time.Sleep(100 * time.Millisecond)
+	l.t.SetDTR(true) // IO0 low: select download mode
+	l.t.SetRTS(false)
+	time.Sleep(100 * time.Millisecond)
+	l.t.SetRTS(true) // EN low: reset
+	l.t.SetDTR(false)
+	l.t.SetRTS(true) // re-assert (Windows only propagates DTR on an RTS change)
+	time.Sleep(100 * time.Millisecond)
+	l.t.SetDTR(false)
+	l.t.SetRTS(false)
+	l.t.FlushInput()
+}
+
 // HardReset pulses EN to reboot into the application firmware.
 func (l *Loader) HardReset() {
 	l.t.SetRTS(true)
@@ -177,7 +198,14 @@ func (l *Loader) Connect(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		l.resetToBootloader()
+		// Alternate reset styles so both USB-UART bridges (classic DTR/RTS) and
+		// native USB-Serial-JTAG chips enter download mode without needing to
+		// know the adapter up front.
+		if attempt%2 == 0 {
+			l.resetToBootloader()
+		} else {
+			l.resetToBootloaderUSBJTAG()
+		}
 		for i := 0; i < 5; i++ {
 			if err := l.sync(); err == nil {
 				return nil
