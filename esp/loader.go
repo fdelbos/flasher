@@ -21,13 +21,19 @@ var ErrTimeout = errors.New("esp: read timeout")
 // Loader speaks the ESP serial bootloader protocol over a Transport.
 type Loader struct {
 	t       Transport
-	stub    bool  // false = ROM loader (4-byte status trailer), true = stub (2-byte)
-	curBaud int   // current port baud, tracked for CHANGE_BAUDRATE under the stub
-	chip    *Chip // detected target (register layout + stub); set lazily
+	stub    bool                      // false = ROM loader (4-byte status trailer), true = stub (2-byte)
+	curBaud int                       // current port baud, tracked for CHANGE_BAUDRATE under the stub
+	chip    *Chip                     // detected target (register layout + stub); set lazily
+	reopen  func() (Transport, error) // recreate the port after a USB-JTAG reset re-enumerates it
 }
 
 // NewLoader wraps a Transport. Call Connect before issuing commands.
 func NewLoader(t Transport) *Loader { return &Loader{t: t, curBaud: ROMBaud} }
+
+// SetReopen lets Connect reopen the port after a native USB-Serial-JTAG reset.
+// Such chips re-enumerate their USB when they reset, invalidating the handle; the
+// hook recreates it (typically OpenSerial with the same name/baud).
+func (l *Loader) SetReopen(f func() (Transport, error)) { l.reopen = f }
 
 // Close closes the underlying transport.
 func (l *Loader) Close() error { return l.t.Close() }
@@ -205,6 +211,7 @@ func (l *Loader) Connect(ctx context.Context) error {
 			l.resetToBootloader()
 		} else {
 			l.resetToBootloaderUSBJTAG()
+			l.reopenPort() // native USB re-enumerates on reset — refresh the handle
 		}
 		for i := 0; i < 5; i++ {
 			if err := l.sync(); err == nil {
@@ -213,6 +220,24 @@ func (l *Loader) Connect(ctx context.Context) error {
 		}
 	}
 	return errors.New("esp: failed to sync with chip (check wiring / hold BOOT)")
+}
+
+// reopenPort replaces the transport after a USB-Serial-JTAG reset, which
+// re-enumerates the chip's native USB and leaves the old handle broken ("broken
+// pipe" on the next line-control call). No-op without a reopen hook (e.g. tests).
+func (l *Loader) reopenPort() {
+	if l.reopen == nil {
+		return
+	}
+	_ = l.t.Close()
+	for i := 0; i < 15; i++ { // wait for the device to come back after re-enumeration
+		time.Sleep(200 * time.Millisecond)
+		if t, err := l.reopen(); err == nil {
+			l.t = t
+			l.curBaud = ROMBaud
+			return
+		}
+	}
 }
 
 // --- registers / identity ---

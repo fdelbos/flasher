@@ -450,6 +450,7 @@ func connect(port string) *esp.Loader {
 		fatal(err)
 	}
 	l := esp.NewLoader(t)
+	l.SetReopen(func() (esp.Transport, error) { return esp.OpenSerial(port, esp.ROMBaud) })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	fmt.Printf("connecting to %s ...\n", port)
